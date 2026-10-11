@@ -1,0 +1,84 @@
+seed: 42
+
+data:
+  root: "data"
+  image_dir_glob:
+    - "data/HAM10000_images_part_1"
+    - "data/HAM10000_images_part_2"
+    - "data/HAM10000_images"
+  metadata_glob:
+    - "data/HAM10000_metadata.csv"
+  image_size: 256          # VAE compresses to 32x32 latents
+  num_workers: 8
+  val_ratio: 0.1
+  num_classes: 7           # per-diagnosis conditioning
+
+  splits_dirname: "splits_256"
+
+  dx_classes: ["akiec", "bcc", "bkl", "df", "mel", "nv", "vasc"]
+
+  # 0.5 = rare classes get ~5x attention without memorisation risk.
+  sampler_temperature: 0.5
+
+  malignant_dx: ["mel", "bcc", "akiec"]
+  benign_dx: ["nv", "bkl", "df", "vasc"]
+
+vae:
+  pretrained: "stabilityai/sd-vae-ft-mse"
+  scale_factor: 0.18215
+
+unet:
+  sample_size: 32              # 256 / 8
+  in_channels: 4
+  out_channels: 4
+  layers_per_block: 2
+  block_out_channels: [128, 256, 512, 512]
+  down_block_types:
+    - "DownBlock2D"
+    - "CrossAttnDownBlock2D"
+    - "CrossAttnDownBlock2D"
+    - "CrossAttnDownBlock2D"
+  up_block_types:
+    - "CrossAttnUpBlock2D"
+    - "CrossAttnUpBlock2D"
+    - "CrossAttnUpBlock2D"
+    - "UpBlock2D"
+  cross_attention_dim: 512
+  dropout: 0.1
+  # Saves ~30-40% activation memory at ~20% speed cost. Needed at 256 with
+  # cross-attention blocks.
+  gradient_checkpointing: true
+
+train:
+  batch_size: 8
+  grad_accum_steps: 8          # effective batch = 64 
+  lr: 1e-4
+  weight_decay: 1e-4
+  max_train_steps: 300000      # 256 needs more steps than 128 to converge
+  grad_clip_norm: 1.0
+  mixed_precision: "bf16"
+  warmup_steps: 1000
+  save_every_steps: 20000
+  log_every_steps: 100
+  cfg_dropout_prob: 0.1
+
+eval:
+  val_every_steps: 2000
+  max_val_batches: 20
+  sample_every_steps: 20000
+  sample_steps: 50
+  sample_n_per_class: 4        # 7 classes x 4 = 28-image monitoring grid
+  guidance_scale: 5.0          # 5.0 beat 7.5 empirically; retune after training
+
+diffusion:
+  num_train_timesteps: 1000
+  beta_schedule: "squaredcos_cap_v2"
+  prediction_type: "epsilon"
+
+ema:
+  use_ema: true
+  decay: 0.9999
+
+output:
+  out_dir: "runs/ldm_ham_256_7cls"
+  save_images_dir: "runs/ldm_ham_256_7cls/samples"

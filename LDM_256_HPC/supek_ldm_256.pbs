@@ -1,0 +1,74 @@
+#!/bin/bash
+#PBS -N ldm_ham256
+#PBS -q gpu
+#PBS -l select=1:ngpus=1:ncpus=9:mem=64gb
+#PBS -l walltime=48:00:00
+#PBS -o logs/ldm256_training.out
+#PBS -e logs/ldm256_training.err
+#PBS -m ae
+#PBS -M your email address
+
+echo "========================================"
+echo " Job ID:   $PBS_JOBID"
+echo " Job name: $PBS_JOBNAME"
+echo " Node:     $(hostname)"
+echo " GPUs:     $CUDA_VISIBLE_DEVICES"
+echo " CPUs:     $NCPUS"
+echo " Started:  $(date)"
+echo "========================================"
+
+PROJECT_DIR="$HOME/LDM_256_HPC"
+cd "$PROJECT_DIR" || { echo "ERROR: Cannot cd to $PROJECT_DIR"; exit 1; }
+echo "Working dir: $(pwd)"
+
+mkdir -p logs
+
+module purge
+module load cray-python/3.11.7
+module load cuda/12.5
+
+echo "Python: $(python --version)"
+echo "CUDA:   $(nvcc --version | grep release)"
+
+export OMP_NUM_THREADS=$NCPUS
+# VAE weights must come from the local HF cache on the compute node (no internet).
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+source .venv/bin/activate || { echo "ERROR: Cannot activate .venv"; exit 1; }
+
+nvidia-smi
+echo ""
+
+CONFIG="configs/ldm_ham_256.yaml"
+OUT_DIR="runs/ldm_ham_256_7cls"
+CKPT_DIR="$OUT_DIR/checkpoints"
+
+# Auto-resume: find the latest periodic checkpoint and resume from it.
+# sort -V (version sort) correctly orders step_0020000 < step_0100000.
+LATEST_CKPT=$(ls -d "$CKPT_DIR"/step_* 2>/dev/null | sort -V | tail -n 1)
+
+if [ -n "$LATEST_CKPT" ] && [ -f "$LATEST_CKPT/ckpt.pt" ]; then
+    echo "Resuming from: $LATEST_CKPT/ckpt.pt"
+    accelerate launch \
+        --num_processes 1 \
+        --mixed_precision bf16 \
+        -m src.train \
+        --config "$CONFIG" \
+        --resume "$LATEST_CKPT/ckpt.pt"
+else
+    echo "No checkpoint found. Starting fresh training."
+    accelerate launch \
+        --num_processes 1 \
+        --mixed_precision bf16 \
+        -m src.train \
+        --config "$CONFIG"
+fi
+
+EXIT_CODE=$?
+echo ""
+echo "========================================"
+echo " Training finished at: $(date)"
+echo " Exit code: $EXIT_CODE"
+echo "========================================"
+exit $EXIT_CODE
